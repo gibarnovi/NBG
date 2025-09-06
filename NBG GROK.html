@@ -1,0 +1,214 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>USD & EUR Rates</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+      background: #f9fafb;
+      margin: 0;
+      padding: 0;
+      color: #111;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+    }
+    .card {
+      background: #fff;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+      max-width: 280px;
+      width: 100%;
+      padding: 12px;
+      position: relative;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 8px;
+    }
+    td {
+      text-align: center;
+      vertical-align: middle;
+      padding: 6px 4px;
+      font-size: 14px;
+      color: #1f2937;
+    }
+    .up { color: #22c55e; }
+    .down { color: #ef4444; }
+    .same { color: #6b7280; }
+    #error {
+      margin-top: 6px;
+      font-size: 12px;
+      color: #b71c1c;
+      text-align: center;
+    }
+    .loading {
+      position: absolute;
+      top: 6px;
+      right: 6px;
+      width: 12px;
+      height: 12px;
+      border: 2px solid #6b7280;
+      border-top-color: #3b82f6;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    /* Dark mode styles */
+    @media (prefers-color-scheme: dark) {
+      body {
+        background: #111827;
+        color: #f3f4f6;
+      }
+      .card {
+        background: #1f2937;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.6);
+      }
+      td {
+        color: #f3f4f6;
+      }
+      #error {
+        color: #f87171;
+      }
+      .same { color: #9ca3af; }
+      .loading {
+        border: 2px solid #9ca3af;
+        border-top-color: #60a5fa;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div id="loading" class="loading" style="display: none;"></div>
+    <table>
+      <tbody>
+        <tr id="usd"><td>USD</td><td>...</td><td>...</td></tr>
+        <tr id="eur"><td>EUR</td><td>...</td><td>...</td></tr>
+      </tbody>
+    </table>
+    <div id="error"></div>
+  </div>
+
+  <script>
+    const API_URL = 'https://nbg.gov.ge/gw/api/ct/monetarypolicy/currencies/ka/json';
+    const PROXY_URL = null; // Set to '/api/nbg' if using a proxy
+    const REFRESH_INTERVAL = 5 * 60 * 1000; // 5 minutes
+
+    function toNum(v) {
+      return v == null ? NaN : Number(v);
+    }
+
+    async function fetchRates() {
+      const url = PROXY_URL || API_URL;
+      const loading = document.getElementById('loading');
+      const error = document.getElementById('error');
+
+      loading.style.display = 'block';
+      error.textContent = '';
+
+      try {
+        const res = await fetch(url, { cache: 'no-cache' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        
+        const payload = await res.json();
+        const list = Array.isArray(payload) ? payload.flatMap(x => x.currencies || []) : [];
+        
+        const pick = (code) => list.find(it => String(it.code).toUpperCase() === code);
+
+        render('usd', pick('USD'));
+        render('eur', pick('EUR'));
+      } catch (err) {
+        console.error('fetchRates error:', err);
+        error.textContent = 'Error loading rates. Please try again later.';
+      } finally {
+        loading.style.display = 'none';
+      }
+    }
+
+    function render(rowId, cur) {
+      if (!cur) return;
+      const row = document.getElementById(rowId)?.children;
+      if (!row) return;
+
+      const rate = toNum(cur.rate);
+      const diff = toNum(cur.diff);
+      
+      row[1].textContent = Number.isFinite(rate) ? rate.toFixed(4) : '-';
+      const symbol = diff > 0 ? '▲' : diff < 0 ? '▼' : '•';
+      const cls = diff > 0 ? 'up' : diff < 0 ? 'down' : 'same';
+      row[2].innerHTML = `<span class="${cls}">${symbol} ${Number.isFinite(diff) ? diff.toFixed(4) : '-'}</span>`;
+    }
+
+    // Initial fetch
+    fetchRates();
+
+    // Set up interval with error backoff
+    let errorCount = 0;
+    const maxErrors = 5;
+    function scheduleNextFetch() {
+      setTimeout(async () => {
+        try {
+          await fetchRates();
+          errorCount = 0; // Reset on success
+        } catch {
+          errorCount++;
+          if (errorCount >= maxErrors) {
+            document.getElementById('error').textContent = 'Too many errors. Retrying in 10 minutes.';
+            setTimeout(scheduleNextFetch, 10 * 60 * 1000);
+            return;
+          }
+        }
+        scheduleNextFetch();
+      }, errorCount > 0 ? REFRESH_INTERVAL * 2 : REFRESH_INTERVAL);
+    }
+
+    scheduleNextFetch();
+  </script>
+</body>
+</html>
